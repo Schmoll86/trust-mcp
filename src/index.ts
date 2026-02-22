@@ -55,23 +55,30 @@ function errorText(err: unknown): string {
 }
 
 async function lookupTrust(agentId: string): Promise<any> {
+  // Try direct lookup by ID first
   const res = await safeFetch(`${REGISTRY_URL}/v1/trust/${agentId}`);
-  if (!res.ok) {
-    // Try searching by name
-    const searchRes = await safeFetch(`${REGISTRY_URL}/registry/agents`);
-    if (searchRes.ok) {
-      const data = await searchRes.json();
-      const agent = data.agents?.find((a: any) =>
-        a.name?.toLowerCase() === agentId.toLowerCase() ||
-        a.id === agentId
-      );
-      if (agent) {
-        return { found: true, agent };
-      }
-    }
-    return { found: false, error: "Agent not found in registry" };
+  if (res.ok) {
+    return { found: true, ...(await res.json()) };
   }
-  return { found: true, ...(await res.json()) };
+
+  // Try searching by name, then fetch real score
+  const searchRes = await safeFetch(`${REGISTRY_URL}/registry/agents`);
+  if (searchRes.ok) {
+    const data = await searchRes.json();
+    const agent = data.agents?.find((a: any) =>
+      a.name?.toLowerCase() === agentId.toLowerCase() ||
+      a.id === agentId
+    );
+    if (agent) {
+      // Fetch real trust score by resolved ID
+      const scoreRes = await safeFetch(`${REGISTRY_URL}/v1/trust/${agent.id}`);
+      if (scoreRes.ok) {
+        return { found: true, ...(await scoreRes.json()) };
+      }
+      return { found: true, agent };
+    }
+  }
+  return { found: false, error: "Agent not found in registry" };
 }
 
 async function registerAgent(name: string, contact: string, description?: string): Promise<any> {
@@ -115,7 +122,7 @@ async function submitReview(
 const server = new Server(
   {
     name: "trust-mcp",
-    version: "1.1.0",
+    version: "1.1.1",
   },
   {
     capabilities: {
@@ -307,11 +314,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const res = await safeFetch(`${REGISTRY_URL}/registry/agents`);
         const data = await res.json();
         const agents = data.agents?.slice(0, (args.limit as number) || 20) || [];
-        const list = agents
-          .map((a: any) => {
-            const score = a.trust_score || 0;
-            const tier = getTier(score);
-            return `${tier.badge} ${a.name} (${score}/100)`;
+        // Fetch real trust scores for each agent
+        const scored = await Promise.all(
+          agents.map(async (a: any) => {
+            try {
+              const scoreRes = await safeFetch(`${REGISTRY_URL}/v1/trust/${a.id}`);
+              if (scoreRes.ok) {
+                const scoreData = await scoreRes.json();
+                return { name: a.name, score: scoreData.trust_score?.total || 0 };
+              }
+            } catch {}
+            return { name: a.name, score: 0 };
+          })
+        );
+        const list = scored
+          .map((a) => {
+            const tier = getTier(a.score);
+            return `${tier.badge} ${a.name} (${a.score}/100)`;
           })
           .join("\n");
         return {
