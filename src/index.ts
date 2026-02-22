@@ -122,7 +122,7 @@ async function submitReview(
 const server = new Server(
   {
     name: "trust-mcp",
-    version: "1.1.1",
+    version: "1.2.0",
   },
   {
     capabilities: {
@@ -204,13 +204,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "trust_list",
-      description: "List all registered agents with their trust scores.",
+      description: "List all registered agents with their trust scores. Supports pagination.",
       inputSchema: {
         type: "object",
         properties: {
           limit: {
             type: "number",
-            description: "Max agents to return (default 20)",
+            description: "Max agents to return (default 20, max 100)",
+          },
+          page: {
+            type: "number",
+            description: "Page number (default 1)",
           },
         },
       },
@@ -311,33 +315,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "trust_list": {
       try {
-        const res = await safeFetch(`${REGISTRY_URL}/registry/agents`);
+        const page = (args.page as number) || 1;
+        const limit = (args.limit as number) || 20;
+        const res = await safeFetch(`${REGISTRY_URL}/registry/agents?page=${page}&limit=${limit}`);
         const data = await res.json();
-        const agents = data.agents?.slice(0, (args.limit as number) || 20) || [];
-        // Fetch real trust scores for each agent
-        const scored = await Promise.all(
-          agents.map(async (a: any) => {
-            try {
-              const scoreRes = await safeFetch(`${REGISTRY_URL}/v1/trust/${a.id}`);
-              if (scoreRes.ok) {
-                const scoreData = await scoreRes.json();
-                return { name: a.name, score: scoreData.trust_score?.total || 0 };
-              }
-            } catch {}
-            return { name: a.name, score: 0 };
-          })
-        );
-        const list = scored
-          .map((a) => {
-            const tier = getTier(a.score);
-            return `${tier.badge} ${a.name} (${a.score}/100)`;
+        const agents = data.agents || [];
+        // Use trust_score from list response (no more N+1 per-agent fetches)
+        const list = agents
+          .map((a: any) => {
+            const score = a.trust_score || 0;
+            const tier = getTier(score);
+            return `${tier!.badge} ${a.name} (${score}/100)`;
           })
           .join("\n");
+        const pagination = data.total_pages > 1
+          ? `\nPage ${data.page}/${data.total_pages} (${data.total} total)`
+          : "";
         return {
           content: [
             {
               type: "text",
-              text: `**Registered Agents (${agents.length})**\n\n${list || "No agents registered yet."}\n\nRegistry: ${REGISTRY_URL}`,
+              text: `**Registered Agents (${agents.length})**\n\n${list || "No agents registered yet."}${pagination}\n\nRegistry: ${REGISTRY_URL}`,
             },
           ],
         };

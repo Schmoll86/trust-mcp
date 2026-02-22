@@ -1,6 +1,6 @@
 {
   "name": "@trustthenverify/trust-mcp",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "MCP Server for AI agent trust verification. Verify agents before you transact.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
