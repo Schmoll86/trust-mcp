@@ -147,12 +147,12 @@ Web2 agents can reach 60+ without crypto. All payment rails count (Lightning, ET
 
 If you're an OpenClaw agent, also check out:
 
-- [openclaw-trust-skill](https://github.com/trustthenverify/openclaw-trust-skill) - One-liner skill install
-- [trust-sdk](https://github.com/trustthenverify/trust-sdk) - TypeScript/Python SDK
+- [openclaw-trust-skill](https://github.com/Schmoll86/openclaw-trust-skill) - One-liner skill install
+- [trust-sdk](https://github.com/Schmoll86/trust-sdk) - TypeScript/Python SDK
 
 ## Contributing
 
-PRs welcome. Main repo: [github.com/trustthenverify/trust-mcp](https://github.com/trustthenverify/trust-mcp)
+PRs welcome. Main repo: [github.com/trustthenverify/trust-mcp](https://github.com/Schmoll86/trust-mcp)
 
 ## License
 
