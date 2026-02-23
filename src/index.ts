@@ -291,6 +291,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const page = (args.page as number) || 1;
         const limit = (args.limit as number) || 20;
         const res = await safeFetch(`${REGISTRY_URL}/registry/agents?page=${page}&limit=${limit}`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return fail(`❌ Failed to list agents: ${body.error || res.status}`);
+        }
         const data = await res.json();
         const agents = data.agents || [];
         const list = agents.map((a: any) => {
