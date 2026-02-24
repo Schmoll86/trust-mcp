@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Trust MCP Server v2.0.0
+ * Trust MCP Server v2.1.0
  *
  * Provides AI agents with tools to verify trust before transacting.
  * Part of the trustthenverify.com protocol.
@@ -14,6 +14,10 @@
  * - trust_challenge: Get a verification challenge for a chain
  * - trust_search: Search agents by criteria
  * - trust_evidence: Submit self-reported evidence
+ * - trust_dispute: File a dispute against an agent
+ * - trust_endorse: Endorse an agent
+ * - trust_transaction: Record a transaction for trust scoring
+ * - trust_history: View trust score trajectory over time
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -206,12 +210,68 @@ const TOOLS = [
       required: ["agent_id", "type", "data"],
     },
   },
+  {
+    name: "trust_dispute",
+    description: "File a dispute against an agent. Creates negative evidence affecting their trust score. Rate-limited to 3 per reporter per day.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "Agent UUID to dispute" },
+        reason: { type: "string", description: "Reason for the dispute" },
+        reporter_id: { type: "string", description: "Your agent UUID (optional)" },
+        amount_sats: { type: "number", description: "Disputed amount in sats (optional)" },
+        payment_hash: { type: "string", description: "Lightning payment hash if applicable (optional)" },
+      },
+      required: ["agent_id", "reason"],
+    },
+  },
+  {
+    name: "trust_endorse",
+    description: "Endorse an agent to boost their social trust score. Endorser must be a registered agent. Self-endorsements are rejected.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "Agent UUID to endorse" },
+        endorser_id: { type: "string", description: "Your agent UUID or pubkey" },
+        comment: { type: "string", description: "Endorsement comment (optional)" },
+      },
+      required: ["agent_id", "endorser_id"],
+    },
+  },
+  {
+    name: "trust_transaction",
+    description: "Record a completed transaction for trust scoring. Adds economic evidence and recalculates the agent's score. Deduplicates by payment_hash.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "Agent UUID" },
+        type: { type: "string", description: "Transaction type", enum: ["payment_sent", "payment_received"] },
+        amount_sats: { type: "number", description: "Amount in sats (optional)" },
+        counterparty: { type: "string", description: "Counterparty name or ID (optional)" },
+        payment_hash: { type: "string", description: "Lightning payment hash for dedup (optional)" },
+        description: { type: "string", description: "Transaction description (optional)" },
+      },
+      required: ["agent_id", "type"],
+    },
+  },
+  {
+    name: "trust_history",
+    description: "View an agent's trust score history and trajectory (improving/stable/declining). Shows how their score has changed over time.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "Agent UUID to look up" },
+        limit: { type: "number", description: "Max history entries to return (default 20)" },
+      },
+      required: ["agent_id"],
+    },
+  },
 ];
 
 // ─── Tool Handlers ───────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "trust-mcp", version: "2.0.0" },
+  { name: "trust-mcp", version: "2.1.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -413,6 +473,70 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return ok(`📋 Evidence submitted\n\nType: ${result.type}\nVerified: ${result.verified ? "Yes" : "No (weighted at 50%)"}\n\n${result.message}`);
       }
 
+      case "trust_dispute": {
+        const res = await postJson("/registry/dispute", {
+          agent_id: args.agent_id,
+          reason: args.reason,
+          reporter_id: args.reporter_id,
+          amount_sats: args.amount_sats,
+          payment_hash: args.payment_hash,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return fail(`Dispute failed: ${body.error || res.status}`);
+        }
+        const result = await res.json();
+        return ok(`Dispute filed against ${args.agent_id}\n\n${result.message}${result.new_score !== undefined ? `\nUpdated score: ${result.new_score}/100` : ""}`);
+      }
+
+      case "trust_endorse": {
+        const res = await postJson("/registry/endorsement", {
+          agent_id: args.agent_id,
+          endorser_pubkey: args.endorser_id,
+          comment: args.comment,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return fail(`Endorsement failed: ${body.error || res.status}`);
+        }
+        const result = await res.json();
+        return ok(`Endorsement submitted for ${args.agent_id}\n\n${result.message}${result.new_score !== undefined ? `\nUpdated score: ${result.new_score}/100` : ""}`);
+      }
+
+      case "trust_transaction": {
+        const res = await postJson("/registry/transaction", {
+          agent_id: args.agent_id,
+          type: args.type,
+          amount_sats: args.amount_sats,
+          counterparty: args.counterparty,
+          payment_hash: args.payment_hash,
+          description: args.description,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return fail(`Transaction record failed: ${body.error || res.status}`);
+        }
+        const result = await res.json();
+        return ok(`Transaction recorded for ${args.agent_id}\n\nType: ${args.type}${args.amount_sats ? `\nAmount: ${args.amount_sats} sats` : ""}\n${result.message}${result.new_score !== undefined ? `\nUpdated score: ${result.new_score}/100` : ""}`);
+      }
+
+      case "trust_history": {
+        const qs = args.limit ? `?limit=${args.limit}` : "";
+        const res = await safeFetch(`${REGISTRY_URL}/v1/trust/${args.agent_id}/history${qs}`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return fail(`Trust history failed: ${body.error || res.status}`);
+        }
+        const result = await res.json();
+        const trajectory = result.trajectory || "unknown";
+        const entries = result.history || [];
+        const arrow = trajectory === "improving" ? "trending up" : trajectory === "declining" ? "trending down" : "stable";
+        const historyLines = entries.slice(0, 10).map((e: any) =>
+          `  ${e.computed_at}: ${e.total}/100 (confidence: ${(e.confidence * 100).toFixed(0)}%)`
+        ).join("\n");
+        return ok(`**Trust History for ${args.agent_id}**\n\nTrajectory: ${trajectory} (${arrow})\nEntries: ${entries.length}\n\nRecent scores:\n${historyLines || "  No history yet."}`);
+      }
+
       default:
         return fail(`Unknown tool: ${name}`);
     }
@@ -424,7 +548,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Trust MCP Server v2.0.0 running on stdio");
+  console.error("Trust MCP Server v2.1.0 running on stdio");
 }
 
 main().catch(console.error);
